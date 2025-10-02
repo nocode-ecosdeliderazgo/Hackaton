@@ -2,486 +2,149 @@ openapi: 3.0.3
 info:
   title: Tipo de Cambio DOF API
   version: 1.0.0
-  description: |
-    API para automatizar el tipo de cambio del dólar del DOF con validación opcional del FIX de Banxico,
-    registro en Google Sheets, y cálculo de promedios semanal/mensual.
-  contact:
-    name: API Support
-    email: support@example.com
-
+  description: API para obtener el tipo de cambio del DOF, validar con FIX de Banxico, registrar en Google Sheets y calcular promedios.
 servers:
-  - url: http://localhost:8080
-    description: Servidor de desarrollo
-  - url: https://api.example.com
-    description: Servidor de producción
-
-tags:
-  - name: Health
-    description: Endpoints de estado del servicio
-  - name: Tipo de Cambio
-    description: Endpoints para obtener y registrar tipos de cambio
-
-paths:
-  /health:
-    get:
-      summary: Verifica el estado del servicio
-      description: Endpoint para health check del microservicio
-      tags:
-        - Health
-      operationId: getHealth
-      responses:
-        '200':
-          description: Servicio operativo
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HealthResponse'
-              examples:
-                success:
-                  value:
-                    status: ok
-                    timestamp: '2025-10-02T12:00:00.000Z'
-                    service: tc-dof-microservice
-
-  /tipo-cambio:
-    get:
-      summary: Obtiene el tipo de cambio del DOF
-      description: |
-        Obtiene el tipo de cambio oficial del DOF para una fecha específica.
-        Si BANXICO_TOKEN está configurado, también obtiene el tipo de cambio FIX y valida la diferencia.
-      tags:
-        - Tipo de Cambio
-      operationId: getTipoCambio
-      parameters:
-        - name: fecha
-          in: query
-          required: true
-          description: Fecha en formato YYYY-MM-DD
-          schema:
-            type: string
-            format: date
-            pattern: '^\d{4}-\d{2}-\d{2}$'
-            example: '2025-10-02'
-      responses:
-        '200':
-          description: Tipo de cambio obtenido exitosamente
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TipoCambioResponse'
-              examples:
-                with_banxico:
-                  value:
-                    fecha: '2025-10-02'
-                    tc_dof: 18.1234
-                    tc_fix: 18.1150
-                    fuente: DOF
-                    publicado_a_las: '12:00'
-                    nota_validacion: OK
-                with_difference:
-                  value:
-                    fecha: '2025-10-02'
-                    tc_dof: 18.1234
-                    tc_fix: 18.3000
-                    fuente: DOF
-                    publicado_a_las: '12:00'
-                    nota_validacion: DIF_DOF_BANX
-        '400':
-          description: Error de validación en los parámetros
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ValidationError'
-        '404':
-          description: No se encontró tipo de cambio para la fecha
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/NotFoundError'
-              examples:
-                not_found:
-                  value:
-                    error: No se encontró tipo de cambio en DOF para la fecha especificada
-                    fecha: '2025-10-02'
-        '500':
-          description: Error interno del servidor
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/InternalError'
-
-  /registrar:
-    post:
-      summary: Registra un tipo de cambio en Google Sheets
-      description: |
-        Registra un nuevo tipo de cambio en Google Sheets.
-        Si no se proporciona fecha, usa la fecha actual en zona horaria de México.
-        Evita duplicados verificando si ya existe la fecha.
-      tags:
-        - Tipo de Cambio
-      operationId: registrarTipoCambio
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RegistrarRequest'
-            examples:
-              complete:
-                value:
-                  fecha: '2025-10-02'
-                  tc_dof: 18.1234
-                  fuente: DOF
-                  publicado_a_las: '10:35'
-                  nota_validacion: OK
-              minimal:
-                value:
-                  tc_dof: 18.1234
-      responses:
-        '201':
-          description: Registro insertado correctamente
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RegistrarResponse'
-              examples:
-                success:
-                  value:
-                    message: Registro insertado correctamente
-                    fecha: '2025-10-02'
-                    tc_dof: 18.1234
-        '400':
-          description: Error de validación en el cuerpo de la petición
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ValidationError'
-        '409':
-          description: La fecha ya está registrada
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ConflictError'
-              examples:
-                duplicate:
-                  value:
-                    error: La fecha ya está registrada
-                    fecha: '2025-10-02'
-        '500':
-          description: Error interno del servidor
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/InternalError'
-
-  /promedios:
-    get:
-      summary: Calcula promedios semanal y mensual
-      description: |
-        Calcula el promedio semanal (lunes a domingo, ISO week) y mensual (1 a fin de mes)
-        del tipo de cambio. Si no se proporcionan rangos, usa la semana y mes de la fecha actual.
-        Solo considera días con publicación (no imputa fines de semana o feriados).
-      tags:
-        - Tipo de Cambio
-      operationId: getPromedios
-      parameters:
-        - name: from
-          in: query
-          required: false
-          description: Fecha inicial en formato YYYY-MM-DD
-          schema:
-            type: string
-            format: date
-            pattern: '^\d{4}-\d{2}-\d{2}$'
-            example: '2025-10-01'
-        - name: to
-          in: query
-          required: false
-          description: Fecha final en formato YYYY-MM-DD
-          schema:
-            type: string
-            format: date
-            pattern: '^\d{4}-\d{2}-\d{2}$'
-            example: '2025-10-31'
-      responses:
-        '200':
-          description: Promedios calculados exitosamente
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PromediosResponse'
-              examples:
-                with_data:
-                  value:
-                    promedio_semanal:
-                      isoYear: 2025
-                      isoWeek: 40
-                      valor: 18.15
-                      diasConsiderados: 5
-                    promedio_mensual:
-                      year: 2025
-                      month: 10
-                      valor: 18.09
-                      diasConsiderados: 22
-                no_data:
-                  value:
-                    promedio_semanal: null
-                    promedio_mensual: null
-        '400':
-          description: Error de validación en los parámetros
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ValidationError'
-        '500':
-          description: Error interno del servidor
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/InternalError'
+  - url: https://tc-dof.onrender.com   # ⬅️ tu URL de Render
+    description: Producción
 
 components:
-  schemas:
-    HealthResponse:
-      type: object
-      required:
-        - status
-        - timestamp
-        - service
-      properties:
-        status:
-          type: string
-          enum: [ok]
-          description: Estado del servicio
-        timestamp:
-          type: string
-          format: date-time
-          description: Timestamp del health check
-        service:
-          type: string
-          description: Nombre del servicio
-
-    TipoCambioResponse:
-      type: object
-      required:
-        - fecha
-        - tc_dof
-        - fuente
-        - publicado_a_las
-        - nota_validacion
-      properties:
-        fecha:
-          type: string
-          format: date
-          description: Fecha del tipo de cambio
-          example: '2025-10-02'
-        tc_dof:
-          type: number
-          format: double
-          description: Tipo de cambio del DOF
-          example: 18.1234
-        tc_fix:
-          type: number
-          format: double
-          nullable: true
-          description: Tipo de cambio FIX de Banxico (si está disponible)
-          example: 18.1150
-        fuente:
-          type: string
-          description: Fuente del tipo de cambio
-          example: DOF
-        publicado_a_las:
-          type: string
-          description: Hora de publicación
-          example: '12:00'
-        nota_validacion:
-          type: string
-          description: Nota de validación (OK, DIF_DOF_BANX, AUSENTE_DOF)
-          example: OK
-
-    RegistrarRequest:
-      type: object
-      required:
-        - tc_dof
-      properties:
-        fecha:
-          type: string
-          format: date
-          pattern: '^\d{4}-\d{2}-\d{2}$'
-          description: Fecha del tipo de cambio (opcional, usa fecha actual si no se proporciona)
-          example: '2025-10-02'
-        tc_dof:
-          type: number
-          format: double
-          minimum: 0
-          exclusiveMinimum: true
-          description: Tipo de cambio del DOF
-          example: 18.1234
-        fuente:
-          type: string
-          default: DOF
-          description: Fuente del tipo de cambio
-          example: DOF
-        publicado_a_las:
-          type: string
-          default: '12:00'
-          description: Hora de publicación
-          example: '10:35'
-        nota_validacion:
-          type: string
-          default: OK
-          description: Nota de validación
-          example: OK
-
-    RegistrarResponse:
-      type: object
-      required:
-        - message
-        - fecha
-        - tc_dof
-      properties:
-        message:
-          type: string
-          description: Mensaje de confirmación
-          example: Registro insertado correctamente
-        fecha:
-          type: string
-          format: date
-          description: Fecha del registro
-          example: '2025-10-02'
-        tc_dof:
-          type: number
-          format: double
-          description: Tipo de cambio registrado
-          example: 18.1234
-
-    PromediosResponse:
-      type: object
-      required:
-        - promedio_semanal
-        - promedio_mensual
-      properties:
-        promedio_semanal:
-          $ref: '#/components/schemas/PromedioSemanal'
-        promedio_mensual:
-          $ref: '#/components/schemas/PromedioMensual'
-
-    PromedioSemanal:
-      type: object
-      nullable: true
-      required:
-        - isoYear
-        - isoWeek
-        - valor
-        - diasConsiderados
-      properties:
-        isoYear:
-          type: integer
-          description: Año ISO de la semana
-          example: 2025
-        isoWeek:
-          type: integer
-          description: Número de semana ISO (1-53)
-          example: 40
-        valor:
-          type: number
-          format: double
-          description: Promedio del tipo de cambio
-          example: 18.15
-        diasConsiderados:
-          type: integer
-          description: Número de días considerados en el promedio
-          example: 5
-
-    PromedioMensual:
-      type: object
-      nullable: true
-      required:
-        - year
-        - month
-        - valor
-        - diasConsiderados
-      properties:
-        year:
-          type: integer
-          description: Año del mes
-          example: 2025
-        month:
-          type: integer
-          description: Mes (1-12)
-          example: 10
-        valor:
-          type: number
-          format: double
-          description: Promedio del tipo de cambio
-          example: 18.09
-        diasConsiderados:
-          type: integer
-          description: Número de días considerados en el promedio
-          example: 22
-
-    ValidationError:
-      type: object
-      required:
-        - error
-        - details
-      properties:
-        error:
-          type: string
-          example: Validation error
-        details:
-          type: array
-          items:
-            type: object
-
-    NotFoundError:
-      type: object
-      required:
-        - error
-        - fecha
-      properties:
-        error:
-          type: string
-          example: No se encontró tipo de cambio en DOF para la fecha especificada
-        fecha:
-          type: string
-          format: date
-          example: '2025-10-02'
-
-    ConflictError:
-      type: object
-      required:
-        - error
-        - fecha
-      properties:
-        error:
-          type: string
-          example: La fecha ya está registrada
-        fecha:
-          type: string
-          format: date
-          example: '2025-10-02'
-
-    InternalError:
-      type: object
-      required:
-        - error
-        - message
-      properties:
-        error:
-          type: string
-          example: Internal server error
-        message:
-          type: string
-          example: Error al obtener tipo de cambio del DOF
-
   securitySchemes:
     ApiKeyAuth:
       type: apiKey
       in: header
       name: X-API-Key
-      description: API Key para autenticación (opcional)
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, timestamp, service]
+      properties:
+        status: { type: string, enum: [ok] }
+        timestamp: { type: string, format: date-time }
+        service: { type: string }
+    TipoCambioResponse:
+      type: object
+      required: [fecha, tc_dof, fuente, publicado_a_las, nota_validacion]
+      properties:
+        fecha: { type: string, format: date, example: '2025-09-26' }
+        tc_dof: { type: number, format: double, example: 18.4457 }
+        tc_fix: { type: number, format: double, nullable: true, example: 18.3825 }
+        fuente: { type: string, example: DOF }
+        publicado_a_las: { type: string, example: '12:00' }
+        nota_validacion:
+          type: string
+          description: >
+            Posibles valores: OK, DIF_DOF_BANX, SIN_PUBLICACION_FECHA; USADO_ANTERIOR=YYYY-MM-DD, AUSENTE_DOY.
+          example: OK
+    RegistrarRequest:
+      type: object
+      required: [tc_dof]
+      properties:
+        fecha: { type: string, format: date, example: '2025-09-26' }
+        tc_dof: { type: number, format: double, example: 18.4457 }
+        fuente: { type: string, example: DOF }
+        publicado_a_las: { type: string, example: '12:00' }
+        nota_validacion: { type: string, example: OK }
+    RegistrarResponse:
+      type: object
+      required: [message, fecha, tc_dof]
+      properties:
+        message: { type: string, example: Registro insertado correctamente }
+        fecha: { type: string, format: date, example: '2025-09-26' }
+        tc_dof: { type: number, format: double, example: 18.4457 }
+    PromediosResponse:
+      type: object
+      properties:
+        promedio_semanal:
+          type: object
+          nullable: true
+          properties:
+            isoYear: { type: integer, example: 2025 }
+            isoWeek: { type: integer, example: 40 }
+            valor: { type: number, format: double, example: 18.1500 }
+            diasConsiderados: { type: integer, example: 5 }
+        promedio_mensual:
+          type: object
+          nullable: true
+          properties:
+            year: { type: integer, example: 2025 }
+            month: { type: integer, example: 9 }
+            valor: { type: number, format: double, example: 18.0900 }
+            diasConsiderados: { type: integer, example: 22 }
 
-# Nota: La seguridad puede ser habilitada globalmente o por endpoint
-# security:
-#   - ApiKeyAuth: []
+security:
+  - ApiKeyAuth: []   # ⬅️ así el GPT siempre envía X-API-Key
+
+tags:
+  - name: Health
+  - name: Tipo de Cambio
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Verifica el estado del servicio
+      operationId: getHealth
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthResponse' }
+
+  /tipo-cambio:
+    get:
+      tags: [Tipo de Cambio]
+      summary: Obtiene el tipo de cambio del DOF (con fallback si aplica)
+      operationId: getTipoCambio
+      parameters:
+        - in: query
+          name: fecha
+          required: true
+          description: Fecha en formato YYYY-MM-DD
+          schema: { type: string, format: date, example: '2025-09-26' }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TipoCambioResponse' }
+        '404':
+          description: No hay publicación para la fecha (ni tras reintentos)
+
+  /registrar:
+    post:
+      tags: [Tipo de Cambio]
+      summary: Registra un tipo de cambio en Google Sheets
+      operationId: registrarTipoCambio
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegistrarRequest' }
+      responses:
+        '200':     # ⬅️ usa 201 si tu endpoint realmente devuelve 201
+          description: registrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegistrarResponse' }
+        '409':
+          description: La fecha ya está registrada
+
+  /promedios:
+    get:
+      tags: [Tipo de Cambio]
+      summary: Calcula promedios semanal (ISO) y mensual
+      operationId: getPromedios
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date }
+        - in: query
+          name: to
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PromediosResponse' }
