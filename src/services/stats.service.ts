@@ -6,6 +6,7 @@
 import { logger } from '../config/logger.js';
 import { getISOWeek, getWeekRange, getMonthRange, formatDate } from '../utils/dates.js';
 import { obtenerRegistros, RegistroTipoCambio } from './sheets.service.js';
+import { getTipoCambioDOF } from './dof.service.js';
 
 export interface PromedioSemanal {
   isoYear: number;
@@ -27,6 +28,37 @@ export interface PromediosResult {
 }
 
 /**
+ * Obtiene datos del DOF para un rango de fechas cuando no hay registros en Sheets
+ */
+const obtenerDatosDOF = async (fromDate: string, toDate: string): Promise<RegistroTipoCambio[]> => {
+  const registros: RegistroTipoCambio[] = [];
+  const startDate = new Date(fromDate);
+  const endDate = new Date(toDate);
+  
+  // Iterar día por día en el rango
+  for (let date = new Date(startDate); date <= endDate; date.setDate(date.getDate() + 1)) {
+    const fechaStr = formatDate(date);
+    
+    try {
+      const dofResult = await getTipoCambioDOF(fechaStr);
+      if (dofResult) {
+        registros.push({
+          fecha: dofResult.fecha,
+          tc_dof: dofResult.tc_dof,
+          fuente: dofResult.fuente,
+          publicado_a_las: dofResult.publicado_a_las,
+          nota_validacion: 'OK',
+        });
+      }
+    } catch (error) {
+      logger.warn({ fecha: fechaStr, error }, 'No se pudo obtener datos del DOF para la fecha');
+    }
+  }
+  
+  return registros;
+};
+
+/**
  * Calcula promedios semanal y mensual para una fecha dada
  * Si no se proporciona rango, usa la semana y mes de la fecha actual
  */
@@ -41,21 +73,32 @@ export const calcularPromedios = async (
     const defaultToDate = toDate || formatDate(now);
 
     // Obtener registros del rango
-    const registros = await obtenerRegistros(defaultFromDate, defaultToDate);
+    let registros = await obtenerRegistros(defaultFromDate, defaultToDate);
 
+    // Si no hay registros en Sheets, intentar obtener datos del DOF
     if (registros.length === 0) {
-      logger.warn('No hay registros para calcular promedios');
-      return {
-        promedio_semanal: null,
-        promedio_mensual: null,
-      };
+      logger.info({ fromDate: defaultFromDate, toDate: defaultToDate }, 'No hay registros en Sheets, obteniendo datos del DOF');
+      registros = await obtenerDatosDOF(defaultFromDate, defaultToDate);
+      
+      if (registros.length === 0) {
+        logger.warn('No hay registros disponibles para calcular promedios');
+        return {
+          promedio_semanal: null,
+          promedio_mensual: null,
+        };
+      }
     }
 
-    // Calcular promedio semanal
-    const promedioSemanal = calcularPromedioSemanal(registros, now);
+    logger.info({ registrosCount: registros.length, registros: registros.map(r => ({ fecha: r.fecha, tc_dof: r.tc_dof })) }, 'Registros obtenidos para cálculo de promedios');
 
-    // Calcular promedio mensual
-    const promedioMensual = calcularPromedioMensual(registros, now);
+    // Calcular promedio semanal (usar la fecha del rango, no la fecha actual)
+    const fechaReferencia = fromDate ? new Date(fromDate) : now;
+    logger.info({ fechaReferencia: fechaReferencia.toISOString(), fromDate, toDate }, 'Fecha de referencia para cálculos');
+    
+    const promedioSemanal = calcularPromedioSemanal(registros, fechaReferencia);
+
+    // Calcular promedio mensual (usar la fecha del rango, no la fecha actual)
+    const promedioMensual = calcularPromedioMensual(registros, fechaReferencia);
 
     return {
       promedio_semanal: promedioSemanal,
@@ -84,6 +127,15 @@ const calcularPromedioSemanal = (
   const registrosSemana = registros.filter(
     (r) => r.fecha >= startStr && r.fecha <= endStr && r.tc_dof > 0
   );
+
+  logger.info({ 
+    isoYear, 
+    isoWeek, 
+    startStr, 
+    endStr, 
+    registrosSemanaCount: registrosSemana.length,
+    registrosSemana: registrosSemana.map(r => ({ fecha: r.fecha, tc_dof: r.tc_dof }))
+  }, 'Filtrado de registros semanales');
 
   if (registrosSemana.length === 0) {
     return null;
@@ -124,6 +176,15 @@ const calcularPromedioMensual = (
   const registrosMes = registros.filter(
     (r) => r.fecha >= startStr && r.fecha <= endStr && r.tc_dof > 0
   );
+
+  logger.info({ 
+    year, 
+    month, 
+    startStr, 
+    endStr, 
+    registrosMesCount: registrosMes.length,
+    registrosMes: registrosMes.map(r => ({ fecha: r.fecha, tc_dof: r.tc_dof }))
+  }, 'Filtrado de registros mensuales');
 
   if (registrosMes.length === 0) {
     return null;
