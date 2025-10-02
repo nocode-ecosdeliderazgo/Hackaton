@@ -4,8 +4,55 @@
  */
 
 /**
+ * Extrae el tipo de cambio del HTML del DOF por filas
+ * Parser robusto que busca la fecha en formato dd/mm/yyyy dentro de cada <tr>
+ * y extrae el primer número con 4-6 decimales
+ *
+ * @param html - HTML del DOF (decodificado en latin1)
+ * @param isoDate - Fecha en formato YYYY-MM-DD
+ * @returns Tipo de cambio o null si no se encuentra
+ */
+export const extractTcFromDof = (html: string, isoDate: string): number | null => {
+  const [yyyy, mm, dd] = isoDate.split('-');
+
+  // Construir regex de fecha flexible (con o sin ceros a la izquierda)
+  const ddNum = parseInt(dd, 10);
+  const mmNum = parseInt(mm, 10);
+
+  // Buscar filas separadas por </tr>
+  const rows = html.split(/<\/tr>/i);
+
+  // Regex para encontrar la fecha en varios formatos posibles
+  const fechaRe = new RegExp(
+    `\\b0?${ddNum}\\/0?${mmNum}\\/${yyyy}\\b|\\b${ddNum}\\/0?${mmNum}\\/${yyyy}\\b|\\b0?${ddNum}\\/${mmNum}\\/${yyyy}\\b`
+  );
+
+  // Regex para números con 4-6 decimales
+  const numRe = /\b\d{1,2}\.\d{4,6}\b/;
+
+  for (const row of rows) {
+    if (fechaRe.test(row)) {
+      // Normalizar espacios y buscar el número
+      const cleanRow = row.replace(/\s+/g, ' ');
+      const match = cleanRow.match(numRe);
+
+      if (match) {
+        const value = parseFloat(match[0]);
+        if (!isNaN(value) && value > 10 && value < 30) {
+          // Validación razonable para USD/MXN
+          return value;
+        }
+      }
+    }
+  }
+
+  return null;
+};
+
+/**
  * Extrae un valor decimal del texto HTML (formato mexicano)
  * Espera números con 4-6 decimales, ej: 18.1234 o 18,1234
+ * @deprecated Usar extractTcFromDof para mayor robustez
  */
 export const extractDecimalValue = (text: string): number | null => {
   // Acepta punto o coma como separador decimal

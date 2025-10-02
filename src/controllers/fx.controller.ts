@@ -4,7 +4,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../config/logger.js';
-import { getTipoCambioDOF } from '../services/dof.service.js';
+import { getTipoCambioDOF, DOFError } from '../services/dof.service.js';
 import { getTipoCambioFIX, validarDiferenciaDOFvsFIX } from '../services/banxico.service.js';
 import { registrarTipoCambio } from '../services/sheets.service.js';
 import { calcularPromedios } from '../services/stats.service.js';
@@ -25,20 +25,14 @@ export const getTipoCambio = async (req: Request, res: Response, next: NextFunct
 
     logger.info({ fecha }, 'Obteniendo tipo de cambio');
 
-    // Obtener tipo de cambio del DOF
+    // Obtener tipo de cambio del DOF (ahora con fallback automático)
     const dofResult = await getTipoCambioDOF(fecha);
 
-    if (!dofResult) {
-      return res.status(404).json({
-        error: 'No se encontró tipo de cambio en DOF para la fecha especificada',
-        fecha,
-      });
-    }
-
     // Intentar validar con Banxico si está configurado
-    const fixResult = await getTipoCambioFIX(fecha);
+    const fixResult = await getTipoCambioFIX(dofResult.fechaUsada);
 
-    let nota_validacion = 'OK';
+    // Usar nota_validacion del DOF (que ya incluye lógica de fallback)
+    let nota_validacion = dofResult.nota_validacion;
     let tc_fix: number | undefined;
 
     if (fixResult) {
@@ -46,10 +40,16 @@ export const getTipoCambio = async (req: Request, res: Response, next: NextFunct
       const validacion = validarDiferenciaDOFvsFIX(dofResult.tc_dof, fixResult.tc_fix);
 
       if (validacion.excedeLimite) {
-        nota_validacion = 'DIF_DOF_BANX';
+        // Si ya hay una nota de fallback, combinarla con DIF_DOF_BANX
+        nota_validacion =
+          nota_validacion === 'OK'
+            ? 'DIF_DOF_BANX'
+            : `${nota_validacion}; DIF_DOF_BANX`;
+
         logger.warn(
           {
             fecha,
+            fechaUsada: dofResult.fechaUsada,
             tc_dof: dofResult.tc_dof,
             tc_fix: fixResult.tc_fix,
             diferenciaPct: validacion.diferenciaPct,
@@ -61,6 +61,7 @@ export const getTipoCambio = async (req: Request, res: Response, next: NextFunct
 
     const response = {
       fecha: dofResult.fecha,
+      fechaUsada: dofResult.fechaUsada,
       tc_dof: dofResult.tc_dof,
       tc_fix,
       fuente: dofResult.fuente,
@@ -68,9 +69,17 @@ export const getTipoCambio = async (req: Request, res: Response, next: NextFunct
       nota_validacion,
     };
 
-    res.json(response);
+    return res.json(response);
   } catch (error) {
-    next(error);
+    // Capturar error específico de DOF
+    if (error instanceof DOFError && error.code === 'AUSENTE_DOF') {
+      return res.status(404).json({
+        code: 'AUSENTE_DOF',
+        message: error.message,
+        fecha,
+      });
+    }
+    return next(error);
   }
 };
 
@@ -110,13 +119,13 @@ export const registrar = async (req: Request, res: Response, next: NextFunction)
       });
     }
 
-    res.status(201).json({
+    return res.status(201).json({
       message: result.message,
       fecha,
       tc_dof: data.tc_dof,
     });
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
@@ -137,8 +146,8 @@ export const getPromedios = async (req: Request, res: Response, next: NextFuncti
 
     const promedios = await calcularPromedios(from, to);
 
-    res.json(promedios);
+    return res.json(promedios);
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };

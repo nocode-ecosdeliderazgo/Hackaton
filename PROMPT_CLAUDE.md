@@ -1,228 +1,189 @@
-Genera un microservicio en Node.js + Express (TypeScript) para automatizar el tipo de cambio del dólar del DOF con validación opcional del FIX de Banxico, registro en Google Sheets, y cálculo de promedios semanal/mensual. Entrega un proyecto completo y ejecutable con estructura, código, pruebas, OpenAPI y Docker.
+🔧 Encargo: robustecer scraping del DOF (Node + TS)
 
-Objetivo
+Quiero que actualices mi microservicio Node.js + Express + TypeScript que obtiene el tipo de cambio del DOF. Necesito:
 
-Obtener el tipo de cambio oficial del DOF (scrape/parse del histórico mensual por año/mes; heurística ajustable).
+Objetivos
 
-Validar opcionalmente contra FIX Banxico (serie SF43718) usando token.
+Decodificación correcta del HTML del DOF: la página viene en ISO-8859-1 → usar axios con responseType:'arraybuffer' e iconv-lite para decodificar a latin1.
 
-Registrar en Google Sheets (Service Account) con esquema fijo.
+Parser robusto por filas: buscar la fecha en formato dd/mm/yyyy dentro de cada <tr> y extraer el primer número con 4–6 decimales.
 
-Calcular promedio semanal (lunes–domingo) y promedio mensual (1–fin de mes) usando solo días con publicación.
+Fallback a día hábil anterior: si la fecha solicitada no existe (o es fin de semana/feriado), retroceder al último día hábil (máx. 3 reintentos) y reportarlo en nota_validación.
 
-Exponer endpoints REST y OpenAPI 3.0; incluir tests y Dockerfile.
+Endpoint alterno del DOF: si indicadores_detalle.php falla, intentar tipo_cambio_hist.php (mismo year/month).
 
-Tech & calidad
+Logs claros y mensajes de error consistentes (AUSENTE_DOY cuando no hay dato tras reintentos).
 
-Node 18+, Express, TypeScript (ESM), Zod (validación).
+Pruebas automatizadas con fixtures HTML representativos (incluye caso con y sin la fecha).
 
-HTTP client: axios o undici. Logs: pino. Env: dotenv.
+Aceptación
 
-Google Sheets: googleapis (JWT Service Account).
+GET /tipo-cambio?fecha=2025-08-02 (sábado) → 200 con nota_validación que indique fallback, usando 2025-08-01.
 
-Lint/format: ESLint + Prettier.
+GET /tipo-cambio?fecha=2025-10-01 (miércoles) → 200 si la fecha está en HTML; si no aparece aún, retrocede a la anterior hábil y explica el fallback.
 
-Tests: Jest + supertest.
+Si tras 3 reintentos no hay dato → 404 con error JSON { code:"AUSENTE_DOY" }.
 
-Dockerfile (multi-stage) y docker-compose.yml opcional.
+Parser tolerante a espacios/HTML y a codificación latin1.
 
-Scripts en package.json: dev, build, start, test, lint, format.
+Cobertura de tests incluye: fecha hábil, fin de semana, “fecha no listada”, cambio de mes y número con 4–6 decimales.
 
-Estructura
-/src
-  app.ts
-  server.ts
-  /config
-    env.ts
-    logger.ts
-  /utils
-    dates.ts       // helpers semana ISO, rango mes, parse fechas MX
-    hash.ts        // md5(fecha+valor)
-    html.ts        // helpers para extraer número decimal del HTML
-  /services
-    dof.service.ts       // descarga y parse del DOF (por año/mes)
-    banxico.service.ts   // FIX serie SF43718
-    sheets.service.ts    // append/read a Google Sheets
-    stats.service.ts     // promedio semanal/mensual
-  /controllers
-    fx.controller.ts
-    health.controller.ts
-  /routes
-    fx.route.ts
-    health.route.ts
-/tests
-  fx.e2e.test.ts
-openapi.yaml
-Dockerfile
-docker-compose.yml
-jest.config.ts
-tsconfig.json
-.eslintrc.cjs
-.prettierrc
-README.md
+Contexto del repo
 
-Variables de entorno (.env)
-PORT=8080
-TZ=America/Mexico_City
-GOOGLE_PROJECT_ID=...
-GOOGLE_CLIENT_EMAIL=...
-GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-GOOGLE_SHEET_ID=<<ID_DE_LA_HOJA>>
-SHEET_TAB=tc_histórico
-BANXICO_TOKEN=<<OPCIONAL>>
-ALERTA_VARIACION_PCT=1.0
+TS + Express, servicios dof.service.ts, utilidades utils/html.ts, utils/dates.ts.
 
-Esquema de la Sheet (pestaña tc_histórico)
+Endpoints GET /tipo-cambio, POST /registrar, GET /promedios.
 
-Encabezados exactos (fila 1):
+Logger: pino.
 
-fecha (YYYY-MM-DD) | tc_dof | fuente | publicado_a_las | hash_registro | nota_validación
+Tests: jest + supertest.
 
-Endpoints
+OpenAPI ya listo; no cambiar contratos de respuesta.
 
-GET /health → {status:"ok"}
+Cambios que quiero (hazlos como commits atómicos o PR):
+1) Dependencia y utilidades
 
-GET /tipo-cambio?fecha=YYYY-MM-DD
+Añade iconv-lite:
 
-Obtiene DOF del día (parsea histórico mensual por YYYY/MM y extrae el valor del día).
+npm i iconv-lite
 
-Si BANXICO_TOKEN está presente, obtiene FIX y marca nota_validación="DIF_DOFBANX" si |DOF−FIX|/FIX > 1%.
 
-Respuesta:
+Crea/actualiza src/utils/dates.ts con:
 
-{
-  "fecha": "2025-10-02",
-  "tc_dof": 18.1234,
-  "tc_fix": 18.1150,
-  "fuente": "DOF",
-  "publicado_a_las": "10:35",
-  "nota_validación": "OK"
+toDDMMYYYY(iso: string): string
+
+isWeekend(iso: string): boolean
+
+previousBusinessDay(iso: string): string // retrocede saltando sáb(6)/dom(0)
+
+2) Descarga y decodificación del HTML
+
+En src/services/dof.service.ts agrega función:
+
+import axios from 'axios';
+import iconv from 'iconv-lite';
+
+async function fetchDofHtml(url: string): Promise<string> {
+  const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 10000 });
+  return iconv.decode(Buffer.from(res.data), 'latin1'); // ISO-8859-1
 }
 
 
-POST /registrar
+Implementa getMonthUrls(isoDate) que devuelva un arreglo de URLs en orden de intento:
 
-Body:
+https://www.dof.gob.mx/indicadores_detalle.php?cod_tipo=1&year=YYYY&month=M
 
-{
-  "fecha": "YYYY-MM-DD",   // si falta, usar hoy MX
-  "tc_dof": 18.1234,
-  "fuente": "DOF",
-  "publicado_a_las": "HH:mm",
-  "nota_validación": "OK"
+https://www.dof.gob.mx/tipo_cambio_hist.php?year=YYYY&month=M
+
+3) Parser por filas (en src/utils/html.ts)
+
+Implementa:
+
+export function extractTcFromDof(html: string, isoDate: string): number | null {
+  const [yyyy, mm, dd] = isoDate.split('-');
+  const fechaMX = `${dd}/${mm}/${yyyy}`;              // dd/mm/yyyy
+  const rows = html.split(/<\/tr>/i);
+  const fechaRe = new RegExp(`\\b${dd}\\/${mm}\\/${yyyy}\\b`);
+  const numRe = /\b\d{1,2}\.\d{4,6}\b/;
+
+  for (const row of rows) {
+    if (fechaRe.test(row)) {
+      const m = row.replace(/\s+/g, ' ').match(numRe);
+      if (m) return parseFloat(m[0]);
+    }
+  }
+  return null;
 }
 
+4) Lógica con fallback (en src/services/dof.service.ts)
 
-Inserta fila si no existe fecha. Genera hash_registro = md5(fecha+tc_dof).
+Implementa getTipoCambioDOF(isoDate: string):
 
-GET /promedios?from=YYYY-MM-DD&to=YYYY-MM-DD
+Intenta hasta 3 veces:
 
-Si no se pasan rangos, usa semana y mes de la fecha actual (zona MX).
+Construye URLs del mes correspondiente a fechaActual (si cambiaste de mes al retroceder, recalcula URLs).
 
-Respuesta:
+Descarga HTML (decodificado).
 
-{
-  "promedio_semanal": { "isoYear": 2025, "isoWeek": 40, "valor": 18.15 },
-  "promedio_mensual": { "year": 2025, "month": 10, "valor": 18.09 }
-}
+Llama extractTcFromDof(html, fechaActual).
 
-Reglas de negocio
+Si encuentra → return { fechaUsada, valor, nota }, donde:
 
-Semana calendario ISO (lun–dom) y mes calendario.
+nota = "OK" si fechaUsada===isoDate,
 
-Solo promediar días con tc_dof registrado (sin imputar fines de semana/feriados).
+o nota = "SIN_PUBLICACION_FECHA; USADO_ANTERIOR=YYYY-MM-DD" si cayó en fallback.
 
-Si DOF no publica para una fecha, devolver 404 lógico o nota_validación="AUSENTE_DOY".
+Si no encuentra → fechaActual = previousBusinessDay(fechaActual) y repite.
 
-Registrar en Sheets: evita duplicados por fecha.
+Si no lo encuentra tras 3 intentos → lanza AUSENTE_DOY (error controlado).
 
-Al registrar, si ALERTA_VARIACION_PCT está definido, compara contra el último día previo y loggea warning si supera el umbral.
+Si el primer endpoint falla (HTTP/HTML inesperado), intenta el alterno.
 
-DOF scraping (importante)
+5) Integración en el controlador
 
-Implementa dof.service.ts con una heurística desacoplada (función pura) que:
+En GET /tipo-cambio, propaga fechaUsada y nota_validación en la respuesta JSON.
 
-descarga el HTML del histórico mensual (por year y month),
+Si lanzas AUSENTE_DOY, responde 404 { code:"AUSENTE_DOY", message:"No hay publicación para la fecha solicitada ni días hábiles anteriores tras 3 intentos" }.
 
-localiza la fila del YYYY-MM-DD,
+6) Logs y depuración
 
-extrae el primer decimal con 4–6 decimales.
+Log DEBUG del tamaño del HTML y del primeros 200 caracteres (no guardes todo en logs).
 
-Centraliza selectores/regex en html.ts para ajustes futuros.
+Si process.env.DEBUG_DOF === '1', guarda el HTML en .debug/dof_YYYY_MM.html (añade .debug al .gitignore).
 
-Maneja cambios de HTML con try/catch y mensajes claros.
+7) Tests (jest)
 
-Banxico FIX
+Crea tests/dof.parser.test.ts con fixtures en tests/fixtures/:
 
-Serie SF43718 (oportuno). Si hay token, traer valor numérico y normalizar coma/punto.
+dof_ok_row.html (contiene una fila con 01/10/2025 y un valor como 18.1234) → extractTcFromDof(..., '2025-10-01') debe devolver 18.1234.
 
-OpenAPI (openapi.yaml)
+dof_missing_date.html (no contiene la fecha del día) → extractTcFromDof devuelve null.
 
-OpenAPI 3.0 con:
+dof_misaligned.html (múltiples filas, espacios y etiquetas varias) → el parser aún encuentra el número.
 
-/health GET
+Test de previousBusinessDay:
 
-/tipo-cambio GET (query: fecha)
+2025-08-02 → 2025-08-01
 
-/registrar POST (schemas request/response)
+2025-08-04 (lunes) → 2025-08-01
 
-/promedios GET (query: from, to)
+Test de getTipoCambioDOF mockeando fetchDofHtml para:
 
-Incluye examples y descripciones; genera campos para usarlo como Action de un GPT (auth por API key opcional).
+1er intento null, 2º intento con fecha anterior encuentra → retorna con nota_validación de fallback.
 
-Tests
+Tres intentos fallidos → lanza error con code AUSENTE_DOY.
 
-Unit: dates.ts (semana ISO), stats.service.ts (promedios).
+8) Endpoints de prueba manual (no cambies contrato)
 
-E2E con supertest:
+GET /tipo-cambio?fecha=2025-08-02 → 200, nota_validación con fallback a 2025-08-01.
 
-GET /health → 200
+GET /tipo-cambio?fecha=2025-10-01 → 200 si está la fila; si no, fallback.
 
-Mock de DOF/Banxico para GET /tipo-cambio
+GET /tipo-cambio?fecha=YYYY-MM-DD (con DEBUG_DOF=1) debe dejar HTML en .debug/.
 
-POST /registrar inserta y no duplica
+HTML real para ajustar el parser (PEGA aquí fragmento real)
 
-GET /promedios con fixtures verifica valores.
+Pega 10–20 líneas del HTML real del DOF (ya decodificado) donde debería aparecer dd/mm/yyyy (o confirma que no aparece):
 
-README (obligatorio)
+<!-- DOF OCTUBRE (fragmento REAL) -->
+[PEGA_AQUÍ_EL_HTML_REAL_DECODIFICADO]
 
-Incluye:
+Notas y estilo
 
-Cómo crear Service Account y compartir la Sheet con GOOGLE_CLIENT_EMAIL.
+Mantén TypeScript estricto.
 
-Scopes requeridos y configuración .env.
+No cambies la forma de las respuestas JSON actuales (solo añade fechaUsada si ya está previsto, y nota_validación).
 
-Comandos:
+Usa try/catch con mensajes claros; maneja timeouts de 10s.
 
-npm i
-npm run dev
-npm run test
-npm run build && npm start
+No introduzcas dependencias pesadas (usa iconv-lite y regex simples).
 
+Entregables
 
-Docker:
+Cambios en src/utils/dates.ts, src/utils/html.ts, src/services/dof.service.ts, controlador de GET /tipo-cambio.
 
-docker build -t tc-dof .
-docker run -p 8080:8080 --env-file .env tc-dof
+Nuevos tests y fixtures HTML.
 
+Actualización mínima del README: sección “Scraping DOF” explicando latin1, fallback y endpoints alternos.
 
-Ejemplos curl:
-
-curl 'http://localhost:8080/health'
-curl 'http://localhost:8080/tipo-cambio?fecha=2025-10-02'
-curl -X POST 'http://localhost:8080/registrar' \
-  -H 'Content-Type: application/json' \
-  -d '{"fecha":"2025-10-02","tc_dof":18.1234,"fuente":"DOF","publicado_a_las":"10:35","nota_validación":"OK"}'
-curl 'http://localhost:8080/promedios'
-
-Calidad
-
-TypeScript estricto, controladores delgados, servicios puros testeables.
-
-Middleware de errores centralizado.
-
-Logs estructurados con pino.
-
-Código limpio y comentado donde el HTML del DOF pueda cambiar.
-
-Entrega el proyecto completo con todos los archivos listados, código implementado y listo para ejecutar.
+Pequeño comentario en openapi.yaml para nota_validación indicando posibles valores: OK, SIN_PUBLICACION_FECHA; USADO_ANTERIOR=YYYY-MM-DD, AUSENTE_DOY.

@@ -70,17 +70,28 @@ paths:
               schema:
                 $ref: '#/components/schemas/TipoCambioResponse'
               examples:
-                with_banxico:
+                ok_with_banxico:
                   value:
                     fecha: '2025-10-02'
+                    fechaUsada: '2025-10-02'
                     tc_dof: 18.1234
                     tc_fix: 18.1150
                     fuente: DOF
                     publicado_a_las: '12:00'
                     nota_validacion: OK
+                with_fallback:
+                  value:
+                    fecha: '2025-08-02'
+                    fechaUsada: '2025-08-01'
+                    tc_dof: 18.5678
+                    tc_fix: 18.5650
+                    fuente: DOF
+                    publicado_a_las: '12:00'
+                    nota_validacion: 'SIN_PUBLICACION_FECHA; USADO_ANTERIOR=2025-08-01'
                 with_difference:
                   value:
                     fecha: '2025-10-02'
+                    fechaUsada: '2025-10-02'
                     tc_dof: 18.1234
                     tc_fix: 18.3000
                     fuente: DOF
@@ -93,15 +104,31 @@ paths:
               schema:
                 $ref: '#/components/schemas/ValidationError'
         '404':
-          description: No se encontró tipo de cambio para la fecha
+          description: No se encontró tipo de cambio para la fecha (ni tras 3 reintentos)
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/NotFoundError'
+                type: object
+                required:
+                  - code
+                  - message
+                  - fecha
+                properties:
+                  code:
+                    type: string
+                    example: AUSENTE_DOF
+                  message:
+                    type: string
+                    example: No hay publicación para la fecha solicitada ni días hábiles anteriores tras 3 intentos
+                  fecha:
+                    type: string
+                    format: date
+                    example: '2025-10-02'
               examples:
-                not_found:
+                ausente_dof:
                   value:
-                    error: No se encontró tipo de cambio en DOF para la fecha especificada
+                    code: AUSENTE_DOF
+                    message: No hay publicación para la fecha solicitada ni días hábiles anteriores tras 3 intentos
                     fecha: '2025-10-02'
         '500':
           description: Error interno del servidor
@@ -265,6 +292,7 @@ components:
       type: object
       required:
         - fecha
+        - fechaUsada
         - tc_dof
         - fuente
         - publicado_a_las
@@ -273,7 +301,12 @@ components:
         fecha:
           type: string
           format: date
-          description: Fecha del tipo de cambio
+          description: Fecha solicitada originalmente
+          example: '2025-10-02'
+        fechaUsada:
+          type: string
+          format: date
+          description: Fecha efectivamente usada (puede ser diferente si se usó fallback a día hábil anterior)
           example: '2025-10-02'
         tc_dof:
           type: number
@@ -296,7 +329,12 @@ components:
           example: '12:00'
         nota_validacion:
           type: string
-          description: Nota de validación (OK, DIF_DOF_BANX, AUSENTE_DOF)
+          description: |
+            Nota de validación. Valores posibles:
+            - OK: Fecha encontrada sin problemas
+            - SIN_PUBLICACION_FECHA; USADO_ANTERIOR=YYYY-MM-DD: Se usó día hábil anterior
+            - DIF_DOF_BANX: Diferencia significativa entre DOF y Banxico (>1%)
+            - AUSENTE_DOF: No hay datos tras 3 reintentos (solo en error 404)
           example: OK
 
     RegistrarRequest:

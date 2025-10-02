@@ -132,6 +132,68 @@ https://www.googleapis.com/auth/spreadsheets
 
 Esto ya está configurado en el código (`sheets.service.ts`).
 
+## 🌐 Scraping del DOF
+
+### Decodificación Latin1
+
+El sitio del DOF publica sus páginas en codificación **ISO-8859-1** (latin1). El microservicio implementa:
+
+- **Descarga con `arraybuffer`**: Recibe los datos como buffer binario
+- **Decodificación con `iconv-lite`**: Convierte de latin1 a UTF-8
+- **Parser robusto por filas**: Busca la fecha en formato `dd/mm/yyyy` dentro de cada `<tr>`
+
+### Fallback a Días Hábiles Anteriores
+
+Si la fecha solicitada no existe en el DOF (fines de semana, feriados, o datos no publicados aún):
+
+1. **Retrocede automáticamente** al día hábil anterior (salta sábados y domingos)
+2. **Máximo 3 reintentos**: Intenta hasta 3 días hábiles anteriores
+3. **Reporta en `nota_validacion`**: Indica qué fecha se usó finalmente
+
+**Ejemplo**:
+```bash
+# Solicitar un sábado
+curl 'http://localhost:8080/tipo-cambio?fecha=2025-08-02'
+
+# Response con fallback
+{
+  "fecha": "2025-08-02",
+  "fechaUsada": "2025-08-01",
+  "tc_dof": 18.1234,
+  "nota_validacion": "SIN_PUBLICACION_FECHA; USADO_ANTERIOR=2025-08-01"
+}
+```
+
+### Endpoints Alternos del DOF
+
+El servicio prueba dos endpoints en orden:
+
+1. **Principal**: `indicadores_detalle.php?cod_tipo=1&year=YYYY&month=M`
+2. **Alterno**: `tipo_cambio_hist.php?year=YYYY&month=M`
+
+Si el primero falla, intenta automáticamente con el segundo.
+
+### Debugging
+
+Activa el modo debug para guardar el HTML descargado:
+
+```bash
+# Configurar en .env
+DEBUG_DOF=1
+
+# Los archivos se guardan en
+.debug/dof_YYYY_MM.html
+```
+
+**Nota**: El directorio `.debug/` está en `.gitignore`.
+
+### Valores de `nota_validacion`
+
+- **`OK`**: Fecha encontrada sin problemas
+- **`SIN_PUBLICACION_FECHA; USADO_ANTERIOR=YYYY-MM-DD`**: Usó día hábil anterior
+- **`DIF_DOF_BANX`**: Diferencia significativa entre DOF y Banxico (>1%)
+- **`AUSENTE_DOF`**: No hay datos tras 3 reintentos (error 404)
+
 ## 📦 Instalación
 
 ### Usando npm
@@ -224,6 +286,7 @@ curl 'http://localhost:8080/tipo-cambio?fecha=2025-10-02'
 ```json
 {
   "fecha": "2025-10-02",
+  "fechaUsada": "2025-10-02",
   "tc_dof": 18.1234,
   "tc_fix": 18.1150,
   "fuente": "DOF",
@@ -231,6 +294,8 @@ curl 'http://localhost:8080/tipo-cambio?fecha=2025-10-02'
   "nota_validacion": "OK"
 }
 ```
+
+**Nota**: `fechaUsada` puede ser diferente a `fecha` si se usó fallback a un día hábil anterior.
 
 ### Registrar Tipo de Cambio
 

@@ -94,3 +94,42 @@ export const isWeekend = (date: Date): boolean => {
   const day = date.getDay();
   return day === 0 || day === 6;
 };
+
+/**
+ * Convierte una fecha ISO (YYYY-MM-DD) a formato mexicano (DD/MM/YYYY)
+ */
+export const toDDMMYYYY = (iso: string): string => {
+  const [year, month, day] = iso.split('-');
+  return `${day}/${month}/${year}`;
+};
+
+/**
+ * Verifica si una fecha ISO es fin de semana
+ */
+export const isWeekendISO = (iso: string): boolean => {
+  const date = parseDate(iso);
+  return isWeekend(date);
+};
+
+/**
+ * Retrocede al día hábil anterior (saltando sábados y domingos)
+ * @param iso - Fecha en formato YYYY-MM-DD
+ * @returns Fecha del día hábil anterior en formato YYYY-MM-DD
+ */
+export const previousBusinessDay = (iso: string): string => {
+  const date = parseDate(iso);
+
+  // Retroceder un día
+  date.setDate(date.getDate() - 1);
+
+  // Si cae en domingo (0), retroceder 2 días más (viernes)
+  if (date.getDay() === 0) {
+    date.setDate(date.getDate() - 2);
+  }
+  // Si cae en sábado (6), retroceder 1 día más (viernes)
+  else if (date.getDay() === 6) {
+    date.setDate(date.getDate() - 1);
+  }
+
+  return formatDate(date);
+};
