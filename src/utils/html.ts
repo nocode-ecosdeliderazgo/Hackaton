@@ -61,11 +61,14 @@ export const DOF_SELECTORS = {
 /**
  * URL base del DOF para el histórico de tipo de cambio
  */
-export const DOF_BASE_URL = 'https://www.dof.gob.mx/indicadores_detalle.php';
+export const DOF_BASE_URL = 'https://sidof.segob.gob.mx/welcome';
 
 /**
- * Construye la URL del DOF para un año y mes específico
+ * Construye la URL del DOF para una fecha específica
+ * Formato: DD-MM-YYYY
  */
-export const buildDOFUrl = (year: number, month: number): string => {
-  return `${DOF_BASE_URL}?cod_tipo=1&year=${year}&month=${month}`;
+export const buildDOFUrl = (year: number, month: number, day: number): string => {
+  const formattedDay = String(day).padStart(2, '0');
+  const formattedMonth = String(month).padStart(2, '0');
+  return `${DOF_BASE_URL}/${formattedDay}-${formattedMonth}-${year}`;
 };

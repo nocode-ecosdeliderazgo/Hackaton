@@ -51,7 +51,7 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   }
 
   // Errores genéricos
-  res.status(500).json({
+  return res.status(500).json({
     error: 'Internal server error',
     message: err.message,
   });

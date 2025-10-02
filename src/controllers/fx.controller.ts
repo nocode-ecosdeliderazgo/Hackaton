@@ -68,9 +68,9 @@ export const getTipoCambio = async (req: Request, res: Response, next: NextFunct
       nota_validacion,
     };
 
-    res.json(response);
+    return res.json(response);
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
@@ -110,13 +110,13 @@ export const registrar = async (req: Request, res: Response, next: NextFunction)
       });
     }
 
-    res.status(201).json({
+    return res.status(201).json({
       message: result.message,
       fecha,
       tc_dof: data.tc_dof,
     });
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
@@ -139,6 +139,6 @@ export const getPromedios = async (req: Request, res: Response, next: NextFuncti
 
     res.json(promedios);
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };

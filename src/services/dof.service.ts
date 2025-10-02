@@ -4,12 +4,12 @@
  */
 
 import axios from 'axios';
+import https from 'https';
 import { logger } from '../config/logger.js';
 import {
   buildDOFUrl,
   extractDecimalValue,
   cleanHtmlText,
-  extractDateFromDOFFormat,
 } from '../utils/html.js';
 
 export interface DOFResult {
@@ -26,12 +26,18 @@ export interface DOFResult {
 export const getTipoCambioDOF = async (fecha: string): Promise<DOFResult | null> => {
   try {
     const [year, month, day] = fecha.split('-').map(Number);
-    const url = buildDOFUrl(year, month);
+    const url = buildDOFUrl(year, month, day);
 
     logger.info({ url, fecha }, 'Consultando DOF para tipo de cambio');
 
+    // Configurar agente HTTPS para desarrollo (deshabilitar verificación SSL)
+    const httpsAgent = new https.Agent({
+      rejectUnauthorized: process.env.NODE_ENV === 'production',
+    });
+
     const response = await axios.get<string>(url, {
       timeout: 10000,
+      httpsAgent,
       headers: {
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -40,7 +46,7 @@ export const getTipoCambioDOF = async (fecha: string): Promise<DOFResult | null>
 
     const html = response.data;
 
-    // Heurística para extraer el tipo de cambio del día específico
+    // Extraer el tipo de cambio del HTML
     const tcValue = extractTipoCambioFromHTML(html, fecha);
 
     if (!tcValue) {
@@ -64,49 +70,41 @@ export const getTipoCambioDOF = async (fecha: string): Promise<DOFResult | null>
 };
 
 /**
- * Heurística para extraer el tipo de cambio de una fecha específica del HTML
- * Busca la fila correspondiente a la fecha y extrae el primer valor decimal
+ * Extrae el tipo de cambio del HTML del nuevo sistema DOF
+ * Busca el valor del dólar en la página
  */
 const extractTipoCambioFromHTML = (html: string, fecha: string): number | null => {
   try {
-    // El DOF publica en formato tabla HTML simple
-    // Buscamos líneas que contengan la fecha y el valor
+    // El nuevo sistema DOF muestra el tipo de cambio directamente en la página
+    // Buscamos el patrón del valor del dólar (formato: XX.XXXX)
+    
+    // Primero intentamos buscar el patrón específico del dólar
+    const dollarMatch = html.match(/DÓLAR.*?(\d{1,2}\.\d{4})/i);
+    if (dollarMatch) {
+      const value = parseFloat(dollarMatch[1]);
+      if (value && value > 10 && value < 30) {
+        logger.info({ fecha, value }, 'Tipo de cambio extraído del DOF (patrón DÓLAR)');
+        return value;
+      }
+    }
 
+    // Si no encontramos el patrón específico, buscamos cualquier valor decimal
+    // que esté en el rango típico del tipo de cambio USD/MXN
     const lines = html.split('\n');
-    const [year, month, day] = fecha.split('-').map(Number);
-
-    // Formatos posibles de fecha en el DOF
-    const possibleDateFormats = [
-      `${day}/${month}/${year}`,
-      `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`,
-      `${day}-${month}-${year}`,
-      `${String(day).padStart(2, '0')}-${String(month).padStart(2, '0')}-${year}`,
-    ];
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = cleanHtmlText(lines[i]);
-
-      // Busca si esta línea contiene la fecha
-      const containsDate = possibleDateFormats.some((format) => line.includes(format));
-
-      if (containsDate) {
-        // Busca en esta línea y las siguientes cercanas
-        for (let j = i; j < Math.min(i + 5, lines.length); j++) {
-          const searchLine = cleanHtmlText(lines[j]);
-          const value = extractDecimalValue(searchLine);
-
-          if (value && value > 10 && value < 30) {
-            // Validación razonable para tipo de cambio USD/MXN
-            logger.info({ fecha, value, line: searchLine }, 'Tipo de cambio extraído del DOF');
-            return value;
-          }
-        }
+    for (const line of lines) {
+      const cleanLine = cleanHtmlText(line);
+      const value = extractDecimalValue(cleanLine);
+      
+      if (value && value > 10 && value < 30) {
+        // Validación razonable para tipo de cambio USD/MXN
+        logger.info({ fecha, value, line: cleanLine }, 'Tipo de cambio extraído del DOF (heurística)');
+        return value;
       }
     }
 
     return null;
   } catch (error) {
-    logger.error({ error, fecha }, 'Error en heurística de extracción DOF');
+    logger.error({ error, fecha }, 'Error en extracción DOF');
     return null;
   }
 };
