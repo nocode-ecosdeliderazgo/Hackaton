@@ -194,6 +194,161 @@ npm run format
 
 ## 🌐 Endpoints
 
+### Operaciones FX
+
+#### POST /operaciones
+
+Crea una nueva operación FX, resuelve los tipos de cambio (DOF o manual), calcula P&L y registra en Google Sheets.
+
+**Request Body**:
+```json
+{
+  "tipo": "cobro",
+  "concepto": "Pago cliente ACME",
+  "contraparte": "ACME Inc.",
+  "fecha_operacion": "2025-10-10",
+  "monto_usd": 800,
+  "tc_base": {
+    "tipo": "DOF",
+    "fecha": "2025-10-10"
+  },
+  "tc_comp": {
+    "tipo": "DOF",
+    "fecha": "hoy"
+  },
+  "notas": "Simulación vs hoy"
+}
+```
+
+**Tipos de Cambio Soportados**:
+
+- **DOF**: Obtiene el tipo de cambio del DOF para una fecha específica
+  - `fecha`: YYYY-MM-DD o "hoy" para usar la fecha actual de México
+  - Aplica fallback automático a día hábil anterior si no hay publicación
+- **MANUAL**: Usa un valor de tipo de cambio proporcionado manualmente
+  - `valor`: número positivo
+
+**Tipos de Operación**:
+
+- **cobro**: El usuario recibe USD
+  - P&L = mxn_comp - mxn_base
+  - Gana si el TC de comparación es mayor que el base
+- **pago**: El usuario paga USD
+  - P&L = mxn_base - mxn_comp
+  - Gana si el TC de comparación es menor que el base
+
+**Ejemplo Response**:
+```json
+{
+  "id": "op_9f2c01",
+  "tipo": "cobro",
+  "concepto": "Pago cliente ACME",
+  "contraparte": "ACME Inc.",
+  "fecha_operacion": "2025-10-10",
+  "monto_usd": 800,
+  "tc_base": {
+    "tipo": "DOF",
+    "fecha": "2025-10-10",
+    "valor": 18.20
+  },
+  "tc_comp": {
+    "tipo": "DOF",
+    "fecha": "2025-10-02",
+    "valor": 18.33,
+    "nota": "SIN_PUBLICACION_FECHA; USADO_ANTERIOR=2025-10-02"
+  },
+  "mxn_base": 14560.00,
+  "mxn_comp": 14664.00,
+  "pnl_mxn": 104.00,
+  "pnl_pct": 0.714,
+  "estado": "pendiente",
+  "sheet_row": 27
+}
+```
+
+**Ejemplo cURL**:
+```bash
+curl -X POST 'http://localhost:8080/operaciones' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "tipo": "cobro",
+    "concepto": "Pago cliente ACME",
+    "fecha_operacion": "2025-10-10",
+    "monto_usd": 800,
+    "tc_base": {"tipo": "DOF", "fecha": "2025-10-10"},
+    "tc_comp": {"tipo": "DOF", "fecha": "hoy"}
+  }'
+```
+
+#### GET /operaciones
+
+Lista operaciones FX con filtros opcionales.
+
+**Query Parameters**:
+- `from`: Fecha inicial (YYYY-MM-DD)
+- `to`: Fecha final (YYYY-MM-DD)
+- `tipo`: Filtrar por tipo (`cobro` o `pago`)
+- `estado`: Filtrar por estado (`pendiente`, `cerrada`, `cancelada`)
+- `q`: Búsqueda en concepto, contraparte y notas
+- `limit`: Número de resultados por página (default: 20, max: 100)
+- `offset`: Offset para paginación (default: 0)
+
+**Ejemplo Response**:
+```json
+{
+  "total": 2,
+  "items": [
+    {
+      "id": "op_9f2c01",
+      "tipo": "cobro",
+      "concepto": "Pago cliente ACME",
+      "fecha_operacion": "2025-10-10",
+      "monto_usd": 800,
+      "tc_base": { "tipo": "DOF", "fecha": "2025-10-10", "valor": 18.20 },
+      "tc_comp": { "tipo": "DOF", "fecha": "2025-10-02", "valor": 18.33 },
+      "mxn_base": 14560.00,
+      "mxn_comp": 14664.00,
+      "pnl_mxn": 104.00,
+      "pnl_pct": 0.714,
+      "estado": "pendiente"
+    }
+  ]
+}
+```
+
+**Ejemplo cURL**:
+```bash
+# Listar todas las operaciones de octubre
+curl 'http://localhost:8080/operaciones?from=2025-10-01&to=2025-10-31'
+
+# Listar solo operaciones de cobro
+curl 'http://localhost:8080/operaciones?tipo=cobro&limit=10'
+
+# Buscar por texto
+curl 'http://localhost:8080/operaciones?q=ACME'
+```
+
+**Esquema de Google Sheets (pestaña operaciones_fx)**:
+
+Crear en este orden exacto de columnas:
+
+```
+id | ts_creacion | tipo | concepto | contraparte | fecha_operacion | monto_usd |
+tc_base_tipo | tc_base_fecha | tc_base_valor |
+tc_comp_tipo | tc_comp_fecha | tc_comp_valor |
+mxn_base | mxn_comp | pnl_mxn | pnl_pct |
+estado | fecha_cierre | notas | hash
+```
+
+**Reglas de Cálculo P&L**:
+
+- `mxn_base` = round(monto_usd × tc_base.valor, 2 decimales)
+- `mxn_comp` = round(monto_usd × tc_comp.valor, 2 decimales)
+- `pnl_mxn`:
+  - cobro: `mxn_comp - mxn_base` (gana si TC sube)
+  - pago: `mxn_base - mxn_comp` (gana si TC baja)
+- `pnl_pct` = round((pnl_mxn / mxn_base) × 100, 3 decimales)
+
 ### Health Check
 
 ```bash

@@ -70,6 +70,60 @@ components:
             month: { type: integer, example: 9 }
             valor: { type: number, format: double, example: 18.0900 }
             diasConsiderados: { type: integer, example: 22 }
+    TCInput:
+      type: object
+      required: [tipo]
+      properties:
+        tipo: { type: string, enum: [DOF, MANUAL] }
+        fecha: { type: string, format: date, example: '2025-10-10', description: 'Requerido si tipo=DOF. Acepta "hoy" o fecha YYYY-MM-DD' }
+        valor: { type: number, format: double, example: 18.20, description: 'Requerido si tipo=MANUAL' }
+    TCResuelto:
+      type: object
+      required: [tipo, valor]
+      properties:
+        tipo: { type: string, enum: [DOF, MANUAL] }
+        fecha: { type: string, format: date, example: '2025-10-10', nullable: true }
+        valor: { type: number, format: double, example: 18.20 }
+        nota: { type: string, example: 'SIN_PUBLICACION_FECHA; USADO_ANTERIOR=2025-10-02', nullable: true }
+    OperacionRequest:
+      type: object
+      required: [tipo, fecha_operacion, monto_usd, tc_base, tc_comp]
+      properties:
+        tipo: { type: string, enum: [cobro, pago] }
+        concepto: { type: string, example: 'Pago cliente ACME' }
+        contraparte: { type: string, example: 'ACME Inc.' }
+        fecha_operacion: { type: string, format: date, example: '2025-10-10' }
+        monto_usd: { type: number, format: double, example: 800 }
+        tc_base: { $ref: '#/components/schemas/TCInput' }
+        tc_comp: { $ref: '#/components/schemas/TCInput' }
+        notas: { type: string, example: 'Simulación vs hoy' }
+    OperacionResponse:
+      type: object
+      required: [id, tipo, fecha_operacion, monto_usd, tc_base, tc_comp, mxn_base, mxn_comp, pnl_mxn, pnl_pct, estado]
+      properties:
+        id: { type: string, example: 'op_9f2c01' }
+        tipo: { type: string, enum: [cobro, pago] }
+        concepto: { type: string, example: 'Pago cliente ACME' }
+        contraparte: { type: string, example: 'ACME Inc.' }
+        fecha_operacion: { type: string, format: date, example: '2025-10-10' }
+        monto_usd: { type: number, format: double, example: 800 }
+        tc_base: { $ref: '#/components/schemas/TCResuelto' }
+        tc_comp: { $ref: '#/components/schemas/TCResuelto' }
+        mxn_base: { type: number, format: double, example: 14560.00 }
+        mxn_comp: { type: number, format: double, example: 14664.00 }
+        pnl_mxn: { type: number, format: double, example: 104.00 }
+        pnl_pct: { type: number, format: double, example: 0.714 }
+        estado: { type: string, enum: [pendiente, cerrada, cancelada] }
+        notas: { type: string, example: 'Simulación vs hoy' }
+        sheet_row: { type: integer, example: 27 }
+    OperacionesListResponse:
+      type: object
+      required: [total, items]
+      properties:
+        total: { type: integer, example: 2 }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/OperacionResponse' }
 
 security:
   - ApiKeyAuth: []   # ⬅️ así el GPT siempre envía X-API-Key
@@ -77,6 +131,7 @@ security:
 tags:
   - name: Health
   - name: Tipo de Cambio
+  - name: Operaciones FX
 
 paths:
   /health:
@@ -148,3 +203,96 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PromediosResponse' }
+
+  /operaciones:
+    post:
+      tags: [Operaciones FX]
+      summary: Crea una nueva operación FX con cálculo de P&L
+      operationId: crearOperacion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OperacionRequest' }
+            examples:
+              cobro_dof_vs_hoy:
+                summary: Cobro con DOF base vs hoy
+                value:
+                  tipo: cobro
+                  concepto: 'Pago cliente ACME'
+                  contraparte: 'ACME Inc.'
+                  fecha_operacion: '2025-10-10'
+                  monto_usd: 800
+                  tc_base:
+                    tipo: DOF
+                    fecha: '2025-10-10'
+                  tc_comp:
+                    tipo: DOF
+                    fecha: hoy
+                  notas: 'Simulación vs hoy'
+              pago_manual:
+                summary: Pago con TC manual
+                value:
+                  tipo: pago
+                  concepto: 'Pago proveedor'
+                  monto_usd: 1200
+                  fecha_operacion: '2025-10-15'
+                  tc_base:
+                    tipo: MANUAL
+                    valor: 18.50
+                  tc_comp:
+                    tipo: DOF
+                    fecha: '2025-10-15'
+      responses:
+        '200':
+          description: Operación creada exitosamente
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperacionResponse' }
+        '400':
+          description: Error de validación
+        '500':
+          description: Error interno
+    get:
+      tags: [Operaciones FX]
+      summary: Lista operaciones FX con filtros opcionales
+      operationId: listarOperaciones
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date, example: '2025-10-01' }
+          description: Fecha inicial (inclusive)
+        - in: query
+          name: to
+          schema: { type: string, format: date, example: '2025-10-31' }
+          description: Fecha final (inclusive)
+        - in: query
+          name: tipo
+          schema: { type: string, enum: [cobro, pago] }
+          description: Filtrar por tipo de operación
+        - in: query
+          name: estado
+          schema: { type: string, enum: [pendiente, cerrada, cancelada] }
+          description: Filtrar por estado
+        - in: query
+          name: q
+          schema: { type: string }
+          description: Búsqueda en concepto, contraparte y notas
+        - in: query
+          name: limit
+          schema: { type: integer, default: 20, maximum: 100 }
+          description: Número de resultados por página
+        - in: query
+          name: offset
+          schema: { type: integer, default: 0 }
+          description: Offset para paginación
+      responses:
+        '200':
+          description: Lista de operaciones
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperacionesListResponse' }
+        '400':
+          description: Error de validación
+        '500':
+          description: Error interno

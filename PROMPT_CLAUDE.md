@@ -1,228 +1,282 @@
-Genera un microservicio en Node.js + Express (TypeScript) para automatizar el tipo de cambio del dólar del DOF con validación opcional del FIX de Banxico, registro en Google Sheets, y cálculo de promedios semanal/mensual. Entrega un proyecto completo y ejecutable con estructura, código, pruebas, OpenAPI y Docker.
+Quiero agregar al microservicio Node.js + Express + TypeScript (ya desplegado en Render y protegido con X-API-Key) un módulo de Operaciones FX que:
 
-Objetivo
+Calcule P&L de operaciones en USD comparando un tipo de cambio base vs un tipo de cambio de comparación.
 
-Obtener el tipo de cambio oficial del DOF (scrape/parse del histórico mensual por año/mes; heurística ajustable).
+Guarde la operación en Google Sheets (pestaña operaciones_fx).
 
-Validar opcionalmente contra FIX Banxico (serie SF43718) usando token.
+Permita listar operaciones con filtros.
 
-Registrar en Google Sheets (Service Account) con esquema fijo.
+Contexto actual
 
-Calcular promedio semanal (lunes–domingo) y promedio mensual (1–fin de mes) usando solo días con publicación.
+Ya existe GET /tipo-cambio con fallback a día hábil anterior y parsing DOF (latin1).
 
-Exponer endpoints REST y OpenAPI 3.0; incluir tests y Dockerfile.
+Ya existe /registrar y /promedios, integración con Google Sheets y auth por service account.
 
-Tech & calidad
+API protegida con X-API-Key y CORS listo para ChatGPT Actions.
 
-Node 18+, Express, TypeScript (ESM), Zod (validación).
+Tenemos openapi.yaml importado en el GPT con Actions.
 
-HTTP client: axios o undici. Logs: pino. Env: dotenv.
+Objetivos
 
-Google Sheets: googleapis (JWT Service Account).
+Nuevo endpoint POST /operaciones: recibe parámetros (tipo, monto, fechas, etc.), resuelve los TCs (DOF o manual), calcula P&L, guarda la fila en Sheets y devuelve el resultado.
 
-Lint/format: ESLint + Prettier.
+Nuevo endpoint GET /operaciones: lista operaciones con filtros (from, to, tipo, estado, q, limit, offset).
 
-Tests: Jest + supertest.
+Actualizar openapi.yaml con los nuevos paths y schemas.
 
-Dockerfile (multi-stage) y docker-compose.yml opcional.
+Tests unitarios (cálculo) e integrados (controlador simulando Sheets).
 
-Scripts en package.json: dev, build, start, test, lint, format.
+README: sección “Operaciones FX”.
 
-Estructura
-/src
-  app.ts
-  server.ts
-  /config
-    env.ts
-    logger.ts
-  /utils
-    dates.ts       // helpers semana ISO, rango mes, parse fechas MX
-    hash.ts        // md5(fecha+valor)
-    html.ts        // helpers para extraer número decimal del HTML
-  /services
-    dof.service.ts       // descarga y parse del DOF (por año/mes)
-    banxico.service.ts   // FIX serie SF43718
-    sheets.service.ts    // append/read a Google Sheets
-    stats.service.ts     // promedio semanal/mensual
-  /controllers
-    fx.controller.ts
-    health.controller.ts
-  /routes
-    fx.route.ts
-    health.route.ts
-/tests
-  fx.e2e.test.ts
-openapi.yaml
-Dockerfile
-docker-compose.yml
-jest.config.ts
-tsconfig.json
-.eslintrc.cjs
-.prettierrc
-README.md
+Esquema de Google Sheets (pestaña operaciones_fx)
 
-Variables de entorno (.env)
-PORT=8080
-TZ=America/Mexico_City
-GOOGLE_PROJECT_ID=...
-GOOGLE_CLIENT_EMAIL=...
-GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-GOOGLE_SHEET_ID=<<ID_DE_LA_HOJA>>
-SHEET_TAB=tc_histórico
-BANXICO_TOKEN=<<OPCIONAL>>
-ALERTA_VARIACION_PCT=1.0
+Crear (si no existe) en este orden exacto de columnas:
 
-Esquema de la Sheet (pestaña tc_histórico)
+id, ts_creacion, tipo, concepto, contraparte,
+fecha_operacion, monto_usd,
+tc_base_tipo, tc_base_fecha, tc_base_valor,
+tc_comp_tipo, tc_comp_fecha, tc_comp_valor,
+mxn_base, mxn_comp, pnl_mxn, pnl_pct,
+estado, fecha_cierre, notas, hash
 
-Encabezados exactos (fila 1):
 
-fecha (YYYY-MM-DD) | tc_dof | fuente | publicado_a_las | hash_registro | nota_validación
+tipo: cobro (te pagan USD) o pago (tú pagas USD).
 
-Endpoints
+Cálculo P&L (desde la perspectiva del usuario):
 
-GET /health → {status:"ok"}
+cobro: pnl_mxn = mxn_comp - mxn_base
 
-GET /tipo-cambio?fecha=YYYY-MM-DD
+pago: pnl_mxn = mxn_base - mxn_comp
 
-Obtiene DOF del día (parsea histórico mensual por YYYY/MM y extrae el valor del día).
+Redondeos: mxn_* a 2 decimales, pnl_pct a 3 decimales.
 
-Si BANXICO_TOKEN está presente, obtiene FIX y marca nota_validación="DIF_DOFBANX" si |DOF−FIX|/FIX > 1%.
+Contratos (OpenAPI)
+POST /operaciones
 
-Respuesta:
+Request JSON:
 
 {
-  "fecha": "2025-10-02",
-  "tc_dof": 18.1234,
-  "tc_fix": 18.1150,
-  "fuente": "DOF",
-  "publicado_a_las": "10:35",
-  "nota_validación": "OK"
+  "tipo": "cobro",                // "cobro" | "pago"
+  "concepto": "Pago cliente ACME",
+  "contraparte": "ACME Inc.",
+  "fecha_operacion": "2025-10-10", // YYYY-MM-DD
+  "monto_usd": 800,
+  "tc_base": { "tipo": "DOF", "fecha": "2025-10-10" },      // O { "tipo":"MANUAL", "valor": 18.20 }
+  "tc_comp": { "tipo": "DOF", "fecha": "hoy" },             // O { "tipo":"DOF","fecha":"2025-10-02" } o { "tipo":"MANUAL","valor": 18.33 }
+  "notas": "Simulación vs hoy"
 }
 
 
-POST /registrar
-
-Body:
+Response 200 JSON (ejemplo):
 
 {
-  "fecha": "YYYY-MM-DD",   // si falta, usar hoy MX
-  "tc_dof": 18.1234,
-  "fuente": "DOF",
-  "publicado_a_las": "HH:mm",
-  "nota_validación": "OK"
+  "id": "op_9f2c01",
+  "tipo": "cobro",
+  "concepto": "Pago cliente ACME",
+  "contraparte": "ACME Inc.",
+  "fecha_operacion": "2025-10-10",
+  "monto_usd": 800,
+  "tc_base": { "tipo": "DOF", "fecha": "2025-10-10", "valor": 18.20 },
+  "tc_comp": {
+    "tipo": "DOF",
+    "fecha": "2025-10-02",
+    "valor": 18.33,
+    "nota": "SIN_PUBLICACION_FECHA; USADO_ANTERIOR=2025-10-02"
+  },
+  "mxn_base": 14560.00,
+  "mxn_comp": 14664.00,
+  "pnl_mxn": 104.00,
+  "pnl_pct": 0.714,
+  "estado": "pendiente",
+  "sheet_row": 27
+}
+
+GET /operaciones
+
+Query params opcionales: from, to, tipo, estado, q, limit, offset
+Response 200:
+
+{
+  "total": 2,
+  "items": [ { "...": "..." }, { "...": "..." } ]
+}
+
+Cambios solicitados (archivos y lógica)
+1) Schemas de validación
+
+Crea un schema Zod (o equivalente) para OperacionRequest:
+
+tipo: enum ['cobro','pago']
+
+fecha_operacion: YYYY-MM-DD
+
+monto_usd: number > 0
+
+tc_base: { tipo: 'DOF'|'MANUAL', fecha?: string, valor?: number }
+
+si tipo==='DOF' → fecha obligatoria YYYY-MM-DD
+
+si tipo==='MANUAL' → valor obligatorio > 0
+
+tc_comp: igual estructura que tc_base pero si tipo==='DOF' permite fecha='hoy' por defecto
+
+concepto, contraparte, notas: opcionales string
+
+2) Servicio de resolución de TC
+
+Usa el servicio existente que consulta DOF:
+
+Si tc.tipo==='DOF':
+
+si fecha==='hoy' o vacío → usa hoy MX (y fallback si aplica).
+
+llama a getTipoCambioDOF(fecha) → obtén { valor, fechaUsada, nota }.
+
+Si tc.tipo==='MANUAL' → usa valor directamente.
+
+Estandariza la salida:
+
+interface TcResuelto { tipo: 'DOF'|'MANUAL'; fecha?: string; valor: number; nota?: string }
+
+3) Cálculo
+
+mxn_base = round(monto_usd * tc_base.valor, 2)
+
+mxn_comp = round(monto_usd * tc_comp.valor, 2)
+
+pnl_mxn: según tipo (reglas arriba)
+
+pnl_pct = mxn_base ? round(pnl_mxn / mxn_base * 100, 3) : 0
+
+4) Persistencia en Google Sheets
+
+Agrega función appendOperacionFx(row: any[]) apuntando a la pestaña operaciones_fx.
+
+Genera:
+
+id: prefijo op_ + random/uuid corto
+
+ts_creacion: ISO now
+
+hash: opcional (ej. hash de campos clave para auditoría)
+
+estado: "pendiente"
+
+fecha_cierre: null
+
+Inserta la fila con el orden de columnas exacto.
+
+Devuelve sheet_row (número de fila insertada si es posible).
+
+5) Rutas
+
+POST /operaciones: implementa el flujo completo (validar → resolver TCs → calcular → escribir a Sheets → responder JSON).
+
+GET /operaciones: lee operaciones_fx, aplica filtros en memoria o con query a Sheets (lo que sea más práctico por ahora) y pagina con limit/offset.
+
+6) OpenAPI
+
+Actualiza openapi.yaml: schemas OperacionRequest, OperacionResponse y paths /operaciones (GET/POST), con security: [ { ApiKeyAuth: [] } ] usando el mismo esquema de API Key global.
+
+Mantén el server apuntando a producción (Render).
+
+7) Tests
+
+Unit:
+
+Cálculo P&L (cobro/pago) con valores base/compuestos.
+
+Redondeos (2 y 3 decimales).
+
+Integración (mock de Sheets y mock de DOF service):
+
+POST /operaciones con DOF/DOF (una fecha tiene fallback).
+
+POST /operaciones con MANUAL/DOF.
+
+GET /operaciones con filtros (al menos tipo, from/to).
+
+Edge cases:
+
+monto_usd inválido, fechas inválidas, tc_base o tc_comp mal definidos → 400.
+
+8) README
+
+Nueva sección “Operaciones FX” con:
+
+Ejemplo de request/response de POST /operaciones
+
+Ejemplo de GET /operaciones
+
+Explicación breve de reglas P&L y fallback DOF.
+
+Aceptación
+
+POST /operaciones con:
+
+{
+  "tipo":"cobro",
+  "concepto":"Pago cliente ACME",
+  "fecha_operacion":"2025-10-10",
+  "monto_usd":800,
+  "tc_base":{"tipo":"DOF","fecha":"2025-10-10"},
+  "tc_comp":{"tipo":"DOF","fecha":"hoy"}
 }
 
 
-Inserta fila si no existe fecha. Genera hash_registro = md5(fecha+tc_dof).
+→ 200 con JSON que incluya mxn_base, mxn_comp, pnl_mxn, pnl_pct, tc_* resueltos y sheet_row.
 
-GET /promedios?from=YYYY-MM-DD&to=YYYY-MM-DD
+GET /operaciones?from=2025-10-01&to=2025-10-31&tipo=cobro → 200 con al menos 1 item si previamente inserté.
 
-Si no se pasan rangos, usa semana y mes de la fecha actual (zona MX).
+OpenAPI reimportable en el editor de GPT sin errores.
 
-Respuesta:
+Estilo/código
 
-{
-  "promedio_semanal": { "isoYear": 2025, "isoWeek": 40, "valor": 18.15 },
-  "promedio_mensual": { "year": 2025, "month": 10, "valor": 18.09 }
-}
+TypeScript estricto, logs con pino (INFO para inicio y éxito; WARN/ERROR para fallas).
 
-Reglas de negocio
+Reusar utilidades existentes (fechas MX, fallback DOF, redondeo).
 
-Semana calendario ISO (lun–dom) y mes calendario.
+Sin romper los contratos previos (/tipo-cambio, /registrar, /promedios).
 
-Solo promediar días con tc_dof registrado (sin imputar fines de semana/feriados).
+Commits atómicos (servicio, rutas, tests, openapi, readme).
 
-Si DOF no publica para una fecha, devolver 404 lógico o nota_validación="AUSENTE_DOY".
+LO QUE TÚ HACES (pasos manuales)
 
-Registrar en Sheets: evita duplicados por fecha.
+Crear pestaña en Sheets
 
-Al registrar, si ALERTA_VARIACION_PCT está definido, compara contra el último día previo y loggea warning si supera el umbral.
+En tu GOOGLE_SHEET_ID, crea la pestaña operaciones_fx con las columnas exactas:
 
-DOF scraping (importante)
-
-Implementa dof.service.ts con una heurística desacoplada (función pura) que:
-
-descarga el HTML del histórico mensual (por year y month),
-
-localiza la fila del YYYY-MM-DD,
-
-extrae el primer decimal con 4–6 decimales.
-
-Centraliza selectores/regex en html.ts para ajustes futuros.
-
-Maneja cambios de HTML con try/catch y mensajes claros.
-
-Banxico FIX
-
-Serie SF43718 (oportuno). Si hay token, traer valor numérico y normalizar coma/punto.
-
-OpenAPI (openapi.yaml)
-
-OpenAPI 3.0 con:
-
-/health GET
-
-/tipo-cambio GET (query: fecha)
-
-/registrar POST (schemas request/response)
-
-/promedios GET (query: from, to)
-
-Incluye examples y descripciones; genera campos para usarlo como Action de un GPT (auth por API key opcional).
-
-Tests
-
-Unit: dates.ts (semana ISO), stats.service.ts (promedios).
-
-E2E con supertest:
-
-GET /health → 200
-
-Mock de DOF/Banxico para GET /tipo-cambio
-
-POST /registrar inserta y no duplica
-
-GET /promedios con fixtures verifica valores.
-
-README (obligatorio)
-
-Incluye:
-
-Cómo crear Service Account y compartir la Sheet con GOOGLE_CLIENT_EMAIL.
-
-Scopes requeridos y configuración .env.
-
-Comandos:
-
-npm i
-npm run dev
-npm run test
-npm run build && npm start
+id | ts_creacion | tipo | concepto | contraparte | fecha_operacion | monto_usd |
+tc_base_tipo | tc_base_fecha | tc_base_valor |
+tc_comp_tipo | tc_comp_fecha | tc_comp_valor |
+mxn_base | mxn_comp | pnl_mxn | pnl_pct |
+estado | fecha_cierre | notas | hash
 
 
-Docker:
+Comparte la hoja con la service account (Editor).
 
-docker build -t tc-dof .
-docker run -p 8080:8080 --env-file .env tc-dof
+Reimportar la Action en tu GPT
 
+Actualiza tu openapi.yaml (con los nuevos paths).
 
-Ejemplos curl:
+En GPT Builder → Actions → Import OpenAPI, pega el YAML.
 
-curl 'http://localhost:8080/health'
-curl 'http://localhost:8080/tipo-cambio?fecha=2025-10-02'
-curl -X POST 'http://localhost:8080/registrar' \
-  -H 'Content-Type: application/json' \
-  -d '{"fecha":"2025-10-02","tc_dof":18.1234,"fuente":"DOF","publicado_a_las":"10:35","nota_validación":"OK"}'
-curl 'http://localhost:8080/promedios'
+La Auth debe seguir enviando X-API-Key.
 
-Calidad
+Probar desde el GPT
 
-TypeScript estricto, controladores delgados, servicios puros testeables.
+“Registra una operación: cobro 800 USD el 2025-10-10 vs hoy.”
 
-Middleware de errores centralizado.
+Luego: “Lista mis operaciones de octubre.”
 
-Logs estructurados con pino.
+(Opcional) Conversation starters
 
-Código limpio y comentado donde el HTML del DOF pueda cambiar.
+“Simular cobro 800 USD vs hoy (y registrar)”
 
-Entrega el proyecto completo con todos los archivos listados, código implementado y listo para ejecutar.
+“Listar operaciones de esta semana”
+
+“Pago 1200 USD vs DOF del 2025-10-02”
+
+(Opcional) Política/Disclaimer
+
+“Las simulaciones usan DOF consolidado (y fallback a día hábil). No constituyen asesoría financiera.”

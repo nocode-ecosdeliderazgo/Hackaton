@@ -6,6 +6,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import { logger } from './config/logger.js';
 import healthRouter from './routes/health.route.js';
 import fxRouter from './routes/fx.route.js';
+import operacionesRouter from './routes/operaciones.route.js';
 import { ZodError } from 'zod';
 
 const app = express();
@@ -29,6 +30,7 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
 // Rutas
 app.use('/', healthRouter);
 app.use('/', fxRouter);
+app.use('/operaciones', operacionesRouter);
 
 // Manejo de rutas no encontradas
 app.use((_req: Request, res: Response) => {
