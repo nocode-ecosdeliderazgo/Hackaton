@@ -35,9 +35,11 @@ const obtenerDatosDOF = async (fromDate: string, toDate: string): Promise<Regist
   const startDate = new Date(fromDate);
   const endDate = new Date(toDate);
   
-  // Iterar día por día en el rango
-  for (let date = new Date(startDate); date <= endDate; date.setDate(date.getDate() + 1)) {
-    const fechaStr = formatDate(date);
+  // Iterar día por día en el rango usando una lógica más robusta
+  let currentDate = new Date(startDate);
+  
+  while (currentDate <= endDate) {
+    const fechaStr = formatDate(currentDate);
     
     try {
       const dofResult = await getTipoCambioDOF(fechaStr);
@@ -53,6 +55,9 @@ const obtenerDatosDOF = async (fromDate: string, toDate: string): Promise<Regist
     } catch (error) {
       logger.warn({ fecha: fechaStr, error }, 'No se pudo obtener datos del DOF para la fecha');
     }
+    
+    // Avanzar al siguiente día de manera segura
+    currentDate = new Date(currentDate.getTime() + 24 * 60 * 60 * 1000);
   }
   
   return registros;
