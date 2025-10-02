@@ -168,7 +168,7 @@ export const obtenerRegistros = async (
  */
 
 import type { OperacionCalculada, OperacionResponse, OperacionesFilter } from '../types/operaciones.js';
-import { randomBytes } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
 
 const OPERACIONES_TAB = 'operaciones_fx';
 
@@ -188,7 +188,7 @@ const generateOperacionHash = (
   monto_usd: number
 ): string => {
   const data = `${id}:${fecha_operacion}:${monto_usd}`;
-  return require('crypto').createHash('md5').update(data).digest('hex').substring(0, 8);
+  return createHash('md5').update(data).digest('hex').substring(0, 8);
 };
 
 /**
